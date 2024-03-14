@@ -23,7 +23,7 @@ runs:
       shell: bash
       run: |
         set -ex
-        syft ${{ inputs.image_name }} --from registry "ghcr.io" -o ${{ inputs.output_format }} > SBOM
+        syft ${{ inputs.image_name }} --from registry -o ${{ inputs.output_format }} > SBOM
 
     - name: Archive SBOM
       uses: actions/upload-artifact@v4
