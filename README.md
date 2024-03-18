@@ -4,21 +4,13 @@ This action uses [Syft](https://github.com/anchore/syft) to create a SBOM ([Soft
 
 ## How to use
 
-```yaml
-env:
-  IMAGE_NAME: ${{ github.repository }}
+Add this step after building and pushing your container image to GitHub's registry:
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Build Docker image
-        run: |
-          docker build -t ${{ env.IMAGE_NAME }}:${{ github.sha }} . --build-arg COMMIT_SHA=${{ github.sha }}
-      - name: Create SBOM
-        uses: digitalservicebund/create-sbom@LATEST_HASH
-        with:
-          image_name: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+```yaml
+- name: Create SBOM
+  uses: digitalservicebund/create-sbom@LATEST_HASH
+  with:
+    image_name: ${{ github.repository }}:${{ github.sha }}
 ```
 
 **Inputs:**
