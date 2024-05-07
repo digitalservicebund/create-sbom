@@ -28,5 +28,5 @@ runs:
     - name: Archive SBOM
       uses: actions/upload-artifact@v4
       with:
-        name: SBOM
+        name: SBOM-${{ inputs.image_name }}
         path: SBOM
