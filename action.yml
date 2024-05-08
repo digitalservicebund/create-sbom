@@ -10,6 +10,10 @@ inputs:
     required: false
     default: "text"
     description: "The output format of the SBOM. Lookup syft's output formats for more detail"
+  artifact_name:
+    required: false
+    default: "SBOM"
+    description: "Name of the resulting artifact uploaded."
 
 runs:
   using: "composite"
@@ -28,5 +32,5 @@ runs:
     - name: Archive SBOM
       uses: actions/upload-artifact@v4
       with:
-        name: SBOM-${{ inputs.image_name }}
+        name: ${{ inputs.artifact_name }}
         path: SBOM
