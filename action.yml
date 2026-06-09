@@ -21,7 +21,7 @@ runs:
     - name: Install syft
       shell: bash
       run: |
-        curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin v1.44.0
+        curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin v1.45.1
 
     - name: Create SBOM
       shell: bash
