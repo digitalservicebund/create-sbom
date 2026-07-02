@@ -1,0 +1,170 @@
+# Dependabot doesn't support version updates for tools pinned inside shell scripts:
+# https://github.com/dependabot/dependabot-core/issues/12506
+name: Syft Update
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # every Monday at 6:00 AM UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: syft-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Read latest Syft release
+        id: latest_release
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const release = await github.rest.repos.getLatestRelease({
+              owner: 'anchore',
+              repo: 'syft',
+            });
+
+            core.setOutput('tag', release.data.tag_name);
+            core.setOutput('url', release.data.html_url);
+
+      - name: Update pinned Syft version
+        id: update
+        env:
+          LATEST_TAG: ${{ steps.latest_release.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          file="action.yml"
+
+          current_tags="$(grep -hoE 'install\.sh \| sh -s -- -b /usr/local/bin v[0-9]+\.[0-9]+\.[0-9]+' "$file" | sed -E 's#.*(v[0-9]+\.[0-9]+\.[0-9]+)$#\1#' | sort -u)"
+          tag_count="$(echo "$current_tags" | sed '/^$/d' | wc -l | tr -d ' ')"
+
+          if [ "$tag_count" -ne 1 ]; then
+            echo "Expected exactly one currently pinned Syft version, found:"
+            echo "$current_tags"
+            exit 1
+          fi
+
+          current_tag="$current_tags"
+          current_version="${current_tag#v}"
+          latest_version="${LATEST_TAG#v}"
+
+          echo "current_tag=$current_tag" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+
+          if [ "$current_version" = "$latest_version" ]; then
+            echo "Syft is already up to date ($LATEST_TAG)."
+            echo "should_update=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$(printf '%s\n%s\n' "$current_version" "$latest_version" | sort -V | tail -n1)" != "$latest_version" ]; then
+            echo "Latest release tag ($LATEST_TAG) is not newer than the pinned version ($current_tag)."
+            echo "should_update=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          sed -i "s|/usr/local/bin ${current_tag}|/usr/local/bin ${LATEST_TAG}|g" "$file"
+
+          if ! grep -q "/usr/local/bin ${LATEST_TAG}" "$file"; then
+            echo "Expected $file to contain ${LATEST_TAG} after update."
+            exit 1
+          fi
+
+          if grep -q "/usr/local/bin ${current_tag}" "$file"; then
+            echo "Detected old version ${current_tag} in $file after update."
+            exit 1
+          fi
+
+          if git diff --quiet -- "$file"; then
+            echo "No changes detected after attempted update."
+            echo "should_update=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "should_update=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push update branch
+        if: ${{ steps.update.outputs.should_update == 'true' }}
+        id: push_branch
+        env:
+          LATEST_TAG: ${{ steps.update.outputs.latest_tag }}
+        run: |
+          set -euo pipefail
+
+          branch="chore/syft-${LATEST_TAG}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -B "$branch"
+          git add action.yml
+          git commit -m "chore(deps): bump syft to ${LATEST_TAG}"
+          git push --force --set-upstream origin "$branch"
+
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update pull request
+        if: ${{ steps.update.outputs.should_update == 'true' }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          BRANCH: ${{ steps.push_branch.outputs.branch }}
+          LATEST_TAG: ${{ steps.update.outputs.latest_tag }}
+          CURRENT_TAG: ${{ steps.update.outputs.current_tag }}
+          RELEASE_URL: ${{ steps.latest_release.outputs.url }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const base = 'main';
+            const head = `${owner}:${process.env.BRANCH}`;
+            const title = `chore(deps): bump syft to ${process.env.LATEST_TAG}`;
+            const body = [
+              '## Syft update',
+              '',
+              `This PR updates the pinned Syft version from ${process.env.CURRENT_TAG} to ${process.env.LATEST_TAG}.`,
+              '',
+              `- Release: ${process.env.RELEASE_URL}`,
+              `- Compare: https://github.com/anchore/syft/compare/${process.env.CURRENT_TAG}...${process.env.LATEST_TAG}`,
+              '',
+              '_Generated by the syft-update workflow._',
+            ].join('\n');
+
+            const existing = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: 'open',
+              head,
+              base,
+              per_page: 100,
+            });
+
+            if (existing.length > 0) {
+              await github.rest.pulls.update({
+                owner,
+                repo,
+                pull_number: existing[0].number,
+                title,
+                body,
+              });
+              core.info(`Updated existing PR #${existing[0].number}.`);
+              return;
+            }
+
+            const created = await github.rest.pulls.create({
+              owner,
+              repo,
+              base,
+              head: process.env.BRANCH,
+              title,
+              body,
+            });
+
+            core.info(`Created PR #${created.data.number}.`);
