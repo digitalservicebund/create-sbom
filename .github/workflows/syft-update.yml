@@ -95,22 +95,43 @@ jobs:
       - name: Commit and push update branch
         if: ${{ steps.update.outputs.should_update == 'true' }}
         id: push_branch
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           LATEST_TAG: ${{ steps.update.outputs.latest_tag }}
-        run: |
-          set -euo pipefail
+        with:
+          # Commits are created via the Contents API (instead of `git commit`) so that
+          # they are automatically GPG-signed and verified by GitHub, satisfying the
+          # "require signed commits" branch ruleset on main.
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const path = 'action.yml';
+            const branch = `chore/syft-${process.env.LATEST_TAG}`;
+            const ref = `heads/${branch}`;
 
-          branch="chore/syft-${LATEST_TAG}"
+            const { data: mainRef } = await github.rest.git.getRef({ owner, repo, ref: 'heads/main' });
+            const baseSha = mainRef.object.sha;
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            try {
+              await github.rest.git.createRef({ owner, repo, ref: `refs/${ref}`, sha: baseSha });
+            } catch (error) {
+              if (error.status !== 422) throw error;
+              await github.rest.git.updateRef({ owner, repo, ref, sha: baseSha, force: true });
+            }
 
-          git checkout -B "$branch"
-          git add action.yml
-          git commit -m "chore(deps): bump syft to ${LATEST_TAG}"
-          git push --force --set-upstream origin "$branch"
+            const { data: existing } = await github.rest.repos.getContent({ owner, repo, path, ref: branch });
 
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+            await github.rest.repos.createOrUpdateFileContents({
+              owner,
+              repo,
+              path,
+              branch,
+              message: `chore(deps): bump syft to ${process.env.LATEST_TAG}`,
+              content: Buffer.from(fs.readFileSync(path, 'utf8')).toString('base64'),
+              sha: existing.sha,
+            });
+
+            core.setOutput('branch', branch);
 
       - name: Create or update pull request
         if: ${{ steps.update.outputs.should_update == 'true' }}
